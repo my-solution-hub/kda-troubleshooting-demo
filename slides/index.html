@@ -1,0 +1,873 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AWS Managed Flink 故障排查 · CloudWatch Logs 实战</title>
+
+<!-- Fonts: Urbanist (display) + Albert Sans (body) — re:Invent Keynote preset -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Urbanist:wght@400;600;700;800&family=Albert+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+
+<!-- Icons: Lucide -->
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+
+<!-- Speaker plugin -->
+<script src="speaker.js"></script>
+
+<style>
+/* ===========================================
+   THEME — re:Invent Keynote
+   =========================================== */
+:root {
+    --bg-primary: #0A0A0A;
+    --bg-gradient: linear-gradient(135deg, #1A0033 0%, #2D0066 40%, #7C3AED 100%);
+    --accent-purple: #8B5CF6;
+    --accent-pink: #D946EF;
+    --accent-orange: #FF9900;
+    --text-primary: #FFFFFF;
+    --text-secondary: rgba(255, 255, 255, 0.62);
+    --glow-purple: rgba(139, 92, 246, 0.4);
+    --card-bg: rgba(139, 92, 246, 0.08);
+    --card-border: rgba(139, 92, 246, 0.25);
+
+    --font-display: 'Urbanist', sans-serif;
+    --font-body: 'Albert Sans', sans-serif;
+
+    /* Typography — clamp() */
+    --title-size: clamp(2rem, 6vw, 5rem);
+    --h2-size: clamp(1.35rem, 3.6vw, 2.6rem);
+    --h3-size: clamp(1rem, 2vw, 1.5rem);
+    --subtitle-size: clamp(0.875rem, 2vw, 1.25rem);
+    --body-size: clamp(0.8rem, 1.4vw, 1.05rem);
+    --small-size: clamp(0.66rem, 1vw, 0.85rem);
+
+    /* Spacing */
+    --slide-padding: clamp(1.25rem, 4vw, 4rem);
+    --content-gap: clamp(0.8rem, 2vw, 1.8rem);
+    --element-gap: clamp(0.3rem, 1vw, 1rem);
+
+    /* Motion */
+    --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+    --duration-normal: 0.7s;
+
+    /* Chart-ish */
+    --chart-card-bg: rgba(139,92,246,0.06);
+    --chart-card-border: rgba(139,92,246,0.2);
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-family: var(--font-body);
+    -webkit-font-smoothing: antialiased;
+}
+
+/* --- viewport-base.css (full) --- */
+html, body { height: 100%; overflow-x: hidden; scrollbar-width: none; }
+html::-webkit-scrollbar, body::-webkit-scrollbar { display: none; }
+html { scroll-snap-type: y mandatory; scroll-behavior: smooth; }
+.slide {
+    width: 100vw; height: 100vh; height: 100dvh; overflow: hidden;
+    scroll-snap-align: start; display: flex; flex-direction: column; position: relative;
+}
+.slide-content {
+    flex: 1; display: flex; flex-direction: column; justify-content: center;
+    max-height: 100%; overflow: hidden; padding: var(--slide-padding); position: relative; z-index: 2;
+}
+.card, .container, .content-box { max-width: min(90vw, 1000px); max-height: min(80vh, 700px); }
+img, .image-container { max-width: 100%; max-height: min(50vh, 400px); object-fit: contain; }
+@media (max-height: 700px) {
+    :root { --slide-padding: clamp(0.75rem,3vw,2rem); --content-gap: clamp(0.4rem,1.5vw,1rem);
+        --title-size: clamp(1.25rem,4.5vw,2.5rem); --h2-size: clamp(1rem,3vw,1.75rem); }
+}
+@media (max-height: 600px) {
+    :root { --slide-padding: clamp(0.5rem,2.5vw,1.5rem); --content-gap: clamp(0.3rem,1vw,0.75rem);
+        --title-size: clamp(1.1rem,4vw,2rem); --body-size: clamp(0.7rem,1.2vw,0.95rem); }
+    .nav-dots, .keyboard-hint, .decorative { display: none; }
+}
+@media (max-height: 500px) {
+    :root { --slide-padding: clamp(0.4rem,2vw,1rem); --title-size: clamp(1rem,3.5vw,1.5rem);
+        --h2-size: clamp(0.9rem,2.5vw,1.25rem); --body-size: clamp(0.65rem,1vw,0.85rem); }
+}
+@media (max-width: 600px) {
+    :root { --title-size: clamp(1.25rem,7vw,2.5rem); }
+}
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.2s !important; }
+    html { scroll-behavior: auto; }
+}
+
+/* ===========================================
+   REVEAL ANIMATIONS
+   =========================================== */
+.reveal {
+    opacity: 0; transform: translateY(25px);
+    transition: opacity var(--duration-normal) var(--ease-out-expo),
+                transform var(--duration-normal) var(--ease-out-expo);
+}
+.slide.visible .reveal { opacity: 1; transform: translateY(0); }
+.slide.visible .reveal.d1 { transition-delay: 0.1s; }
+.slide.visible .reveal.d2 { transition-delay: 0.2s; }
+.slide.visible .reveal.d3 { transition-delay: 0.3s; }
+.slide.visible .reveal.d4 { transition-delay: 0.4s; }
+.slide.visible .reveal.d5 { transition-delay: 0.5s; }
+.slide.visible .reveal.d6 { transition-delay: 0.6s; }
+.slide.visible .reveal.d7 { transition-delay: 0.7s; }
+.slide.visible .reveal.d8 { transition-delay: 0.8s; }
+
+/* ===========================================
+   BACKGROUND ATMOSPHERE — blobs + orbs
+   =========================================== */
+.blob-canvas { position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 0; }
+.blob { position: absolute; border-radius: 50%; filter: blur(80px); will-change: transform, opacity; }
+@keyframes blob1 { 0%{transform:translate(0,0) scale(1);background:rgba(139,92,246,0.55);} 25%{transform:translate(8vw,-12vh) scale(1.2);background:rgba(217,70,239,0.6);} 50%{transform:translate(-5vw,8vh) scale(0.9);background:rgba(59,130,246,0.5);} 75%{transform:translate(12vw,5vh) scale(1.15);background:rgba(236,72,153,0.55);} 100%{transform:translate(0,0) scale(1);background:rgba(139,92,246,0.55);} }
+@keyframes blob2 { 0%{transform:translate(0,0) scale(1);} 33%{transform:translate(-10vw,10vh) scale(1.15);} 66%{transform:translate(8vw,-6vh) scale(0.92);} 100%{transform:translate(0,0) scale(1);} }
+@keyframes blob3 { 0%{transform:translate(0,0) scale(1);} 50%{transform:translate(6vw,10vh) scale(1.1);} 100%{transform:translate(0,0) scale(1);} }
+@keyframes blob4 { 0%{transform:translate(0,0) scale(1);} 50%{transform:translate(-8vw,-8vh) scale(1.08);} 100%{transform:translate(0,0) scale(1);} }
+
+.floating-orb { position: absolute; border-radius: 50%; pointer-events: none; z-index: 0; filter: blur(100px); }
+.orb-purple { background: radial-gradient(circle, rgba(139,92,246,0.35) 0%, rgba(139,92,246,0) 70%); }
+.orb-pink { background: radial-gradient(circle, rgba(217,70,239,0.3) 0%, rgba(217,70,239,0) 70%); }
+.orb-blue { background: radial-gradient(circle, rgba(59,130,246,0.25) 0%, rgba(59,130,246,0) 70%); }
+@keyframes orbFloat1 { 0%,100%{transform:translate(0,0) scale(1);} 50%{transform:translate(20px,-30px) scale(1.05);} }
+@keyframes orbFloat2 { 0%,100%{transform:translate(0,0) scale(1);} 50%{transform:translate(-25px,20px) scale(0.95);} }
+@keyframes orbFloat3 { 0%,100%{transform:translate(0,0) scale(1);} 50%{transform:translate(15px,25px) scale(1.03);} }
+
+/* ===========================================
+   SHARED TEXT ELEMENTS
+   =========================================== */
+.section-label { font-family: var(--font-body); font-size: var(--small-size); font-weight: 600; letter-spacing: 0.15em; text-transform: uppercase; color: var(--accent-purple); margin-bottom: clamp(0.4rem,0.8vw,0.6rem); }
+.section-title { font-family: var(--font-display); font-size: var(--h2-size); font-weight: 800; line-height: 1.15; margin-bottom: clamp(0.4rem,1vw,0.8rem); }
+.section-desc { font-size: var(--body-size); color: var(--text-secondary); line-height: 1.6; }
+.mono { font-family: 'SFMono-Regular', ui-monospace, Menlo, Consolas, monospace; }
+.hl { color: var(--accent-orange); font-weight: 600; }
+.hl-p { color: var(--accent-pink); font-weight: 600; }
+
+/* ===========================================
+   FOOTER + PAGE NUMBER
+   =========================================== */
+.slide-footer { position: fixed; bottom: clamp(8px,1.2vh,16px); left: clamp(12px,2vw,24px); z-index: 999; font-size: clamp(0.6rem,1vw,0.75rem); letter-spacing: 0.02em; color: rgba(255,255,255,0.4); }
+.page-number { position: fixed; bottom: clamp(8px,1.2vh,16px); right: clamp(12px,2vw,24px); z-index: 999; font-family: var(--font-body); font-size: clamp(0.6rem,0.9vw,0.75rem); letter-spacing: 0.05em; color: rgba(255,255,255,0.35); font-variant-numeric: tabular-nums; }
+@media (max-height: 600px) { .slide-footer, .page-number { display: none; } }
+
+/* Progress bar + nav dots */
+.progress-bar { position: fixed; top: 0; left: 0; height: 3px; width: 0; z-index: 1000; background: linear-gradient(90deg, var(--accent-purple), var(--accent-pink), var(--accent-orange)); transition: width 0.2s ease; }
+.nav-dots { position: fixed; right: clamp(10px,1.5vw,20px); top: 50%; transform: translateY(-50%); z-index: 999; display: flex; flex-direction: column; gap: 10px; }
+.nav-dots button { width: 9px; height: 9px; border-radius: 50%; border: none; background: rgba(255,255,255,0.25); cursor: pointer; padding: 0; transition: all 0.3s; }
+.nav-dots button.active { background: var(--accent-pink); transform: scale(1.4); box-shadow: 0 0 12px var(--glow-purple); }
+
+/* ===========================================
+   TITLE SLIDE
+   =========================================== */
+.title-slide { background: #0B0015; }
+.title-slide::after { content:''; position:absolute; inset:0; background: radial-gradient(ellipse 90% 90% at 50% 50%, transparent 40%, rgba(11,0,21,0.6) 100%); pointer-events:none; z-index:1; }
+.title-slide .slide-content { align-items: center; text-align: center; gap: clamp(0.6rem,1.5vw,1.2rem); }
+.title-label { font-family: var(--font-body); font-size: var(--small-size); font-weight: 600; letter-spacing: 0.35em; text-transform: uppercase; color: rgba(255,255,255,0.6); }
+.title-main { font-family: var(--font-display); font-size: var(--title-size); font-weight: 800; line-height: 1.05; letter-spacing: -0.02em; text-shadow: 0 0 30px rgba(139,92,246,0.3), 0 0 80px rgba(139,92,246,0.15); }
+.title-main em { font-style: normal; background: linear-gradient(135deg,#a78bfa,#e879f9,#f472b6); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; filter: drop-shadow(0 0 25px rgba(217,70,239,0.5)); }
+.title-accent { width: clamp(40px,5vw,56px); height: 3px; background: linear-gradient(90deg, var(--accent-orange), var(--accent-pink)); border-radius: 2px; box-shadow: 0 0 12px rgba(255,153,0,0.4); }
+.title-sub { font-size: var(--subtitle-size); color: rgba(255,255,255,0.68); max-width: min(90vw,620px); line-height: 1.6; }
+.speaker-info { font-size: var(--subtitle-size); color: rgba(255,255,255,0.55); margin-top: clamp(0.3rem,0.6vw,0.5rem); letter-spacing: 0.05em; }
+
+/* ===========================================
+   CONTENT LAYOUT — pill cards
+   =========================================== */
+.content-layout { display: grid; grid-template-columns: 2fr 3fr; gap: clamp(1.5rem,4vw,3.5rem); align-items: center; width: 100%; max-width: min(92vw,1200px); margin: 0 auto; }
+@media (max-width: 768px) { .content-layout { grid-template-columns: 1fr; gap: 1rem; } }
+.pill-cards { display: flex; flex-direction: column; gap: clamp(0.4rem,0.9vw,0.7rem); }
+.pill-card { display: flex; align-items: center; gap: clamp(0.6rem,1.2vw,1rem); padding: clamp(0.6rem,1.3vw,0.9rem) clamp(0.8rem,1.5vw,1.2rem); background: var(--card-bg); border: 1px solid var(--card-border); border-radius: clamp(10px,1.2vw,14px); transition: border-color 0.3s, box-shadow 0.3s; }
+.pill-card:hover { border-color: rgba(139,92,246,0.5); box-shadow: 0 0 25px rgba(139,92,246,0.15); }
+.pill-icon { width: clamp(30px,3vw,38px); height: clamp(30px,3vw,38px); border-radius: clamp(6px,0.8vw,10px); flex-shrink: 0; background: linear-gradient(135deg, rgba(139,92,246,0.22), rgba(217,70,239,0.12)); display: flex; align-items: center; justify-content: center; }
+.pill-icon svg { width: 55%; height: 55%; stroke: var(--accent-purple); fill: none; stroke-width: 2; }
+.pill-text { font-size: var(--body-size); font-weight: 600; line-height: 1.3; }
+.pill-text span { color: var(--text-secondary); font-weight: 400; }
+
+/* ===========================================
+   FEATURE GRID + STATS ROW
+   =========================================== */
+.stats-row { display: flex; width: 100%; max-width: min(90vw,900px); border: 1px solid var(--card-border); border-radius: clamp(10px,1.2vw,14px); background: var(--card-bg); overflow: hidden; margin: 0 auto; }
+.stat-item { flex: 1; text-align: center; padding: clamp(0.6rem,1.5vw,1.2rem) clamp(0.5rem,1vw,1rem); border-right: 1px solid rgba(139,92,246,0.15); }
+.stat-item:last-child { border-right: none; }
+.stat-value { font-family: var(--font-display); font-size: clamp(1.4rem,3.5vw,2.6rem); font-weight: 800; line-height: 1.1; background: linear-gradient(135deg, var(--accent-purple), var(--accent-pink)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+.stat-label { font-size: var(--small-size); color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.06em; }
+
+.features-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: clamp(0.5rem,1vw,0.8rem); width: 100%; max-width: min(92vw,960px); margin: 0 auto; }
+@media (max-width: 768px) { .features-grid { grid-template-columns: 1fr; } }
+.feature-card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: clamp(8px,1vw,12px); padding: clamp(0.7rem,1.5vw,1.1rem); transition: border-color 0.3s, box-shadow 0.3s; }
+.feature-card:hover { border-color: rgba(139,92,246,0.45); box-shadow: 0 0 25px rgba(139,92,246,0.12); }
+.feat-icon { width: clamp(28px,2.8vw,36px); height: clamp(28px,2.8vw,36px); border-radius: clamp(5px,0.7vw,8px); background: linear-gradient(135deg, rgba(139,92,246,0.18), rgba(217,70,239,0.1)); display: flex; align-items: center; justify-content: center; margin-bottom: clamp(0.3rem,0.7vw,0.5rem); color: var(--accent-purple); }
+.feat-icon svg { width: 55%; height: 55%; stroke-width: 2; }
+.feature-card h3 { font-family: var(--font-display); font-size: var(--h3-size); font-weight: 700; margin-bottom: clamp(0.1rem,0.3vw,0.25rem); }
+.feature-card p { font-size: var(--small-size); color: var(--text-secondary); line-height: 1.45; }
+.feature-card code { font-family: 'SFMono-Regular', ui-monospace, monospace; color: var(--accent-orange); font-size: 0.92em; }
+
+/* ===========================================
+   SPLIT DIVIDER
+   =========================================== */
+.split-layout { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; width: 100%; max-width: min(92vw,1150px); margin: 0 auto; }
+.split-left { padding-right: clamp(1.5rem,4vw,3rem); }
+.split-product-name { font-family: var(--font-display); font-size: var(--h2-size); font-weight: 400; line-height: 1.2; }
+.split-product-name strong { font-weight: 800; }
+.split-product-sub { font-size: var(--body-size); color: var(--accent-purple); font-weight: 600; margin-top: clamp(0.3rem,0.8vw,0.6rem); }
+.split-divider-line { width: 1px; height: clamp(120px,25vh,250px); background: linear-gradient(180deg, transparent, rgba(139,92,246,0.4), rgba(217,70,239,0.3), transparent); }
+.split-right { padding-left: clamp(1.5rem,4vw,3rem); }
+.split-bullets { display: flex; flex-direction: column; gap: clamp(0.6rem,1.6vh,1.1rem); list-style: none; }
+.split-bullets li { font-size: clamp(0.85rem,1.6vw,1.15rem); line-height: 1.4; color: var(--text-secondary); padding-left: clamp(1rem,1.6vw,1.4rem); position: relative; }
+.split-bullets li::before { content:''; position:absolute; left:0; top: 0.55em; width: clamp(6px,0.7vw,8px); height: clamp(6px,0.7vw,8px); border-radius: 50%; background: linear-gradient(135deg,var(--accent-purple),var(--accent-pink)); }
+.split-bullets li strong { color: var(--text-primary); font-weight: 600; }
+@media (max-width: 768px) { .split-layout { grid-template-columns: 1fr; text-align: center; } .split-left { padding-right: 0; margin-bottom: 1rem; } .split-divider-line { width: 60%; height: 1px; margin: 0 auto; } .split-right { padding-left: 0; margin-top: 1rem; text-align: left; } }
+
+/* ===========================================
+   PIPELINE COLUMNS
+   =========================================== */
+.pipeline-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: clamp(0.5rem,1.2vw,1rem); width: 100%; max-width: min(92vw,1100px); margin: 0 auto; }
+@media (max-width: 768px) { .pipeline-row { grid-template-columns: 1fr; } }
+.pipeline-col { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: clamp(10px,1.2vw,14px); padding: clamp(0.7rem,1.4vw,1.1rem); }
+.pipeline-col-title { font-family: var(--font-display); font-size: var(--h3-size); font-weight: 700; margin-bottom: clamp(0.3rem,0.6vw,0.5rem); line-height: 1.3; }
+.pipeline-bar { height: clamp(3px,0.5vw,5px); border-radius: 3px; margin-bottom: clamp(0.5rem,0.9vw,0.7rem); }
+.pipeline-items { display: flex; flex-direction: column; gap: clamp(0.25rem,0.5vw,0.4rem); }
+.pipeline-items span { font-size: var(--small-size); color: var(--text-secondary); line-height: 1.35; }
+.pipeline-items span b { color: var(--text-primary); font-weight: 600; }
+
+/* ===========================================
+   PROCESS FLOW
+   =========================================== */
+.process-row { display: flex; align-items: flex-start; width: 100%; max-width: min(94vw,1180px); gap: 0; position: relative; margin: 0 auto; }
+.process-step { flex: 1; text-align: center; position: relative; padding: 0 clamp(0.3rem,0.8vw,0.6rem); }
+.step-num { width: clamp(34px,4vw,50px); height: clamp(34px,4vw,50px); border-radius: 50%; margin: 0 auto clamp(0.4rem,0.8vw,0.6rem); display: flex; align-items: center; justify-content: center; font-family: var(--font-display); font-size: var(--body-size); font-weight: 800; background: linear-gradient(135deg, rgba(139,92,246,0.25), rgba(217,70,239,0.15)); border: 1px solid var(--card-border); position: relative; z-index: 1; }
+.process-step:not(:last-child)::after { content:''; position:absolute; top: clamp(17px,2vw,25px); left: calc(50% + clamp(22px,2.6vw,32px)); width: calc(100% - clamp(44px,5.2vw,64px)); height: 1px; background: linear-gradient(90deg, rgba(139,92,246,0.4), rgba(217,70,239,0.2)); z-index: 0; }
+.step-title { font-family: var(--font-display); font-size: var(--h3-size); font-weight: 700; margin-bottom: clamp(0.15rem,0.3vw,0.3rem); }
+.step-desc { font-size: var(--small-size); color: var(--text-secondary); line-height: 1.4; }
+@media (max-width: 768px) { .process-row { flex-direction: column; gap: clamp(0.6rem,1.5vw,1rem); align-items: center; } .process-step { width: 100%; max-width: 320px; } .process-step:not(:last-child)::after { display: none; } }
+
+/* ===========================================
+   COMPARISON SPLIT (also used for 3-col)
+   =========================================== */
+.compare-grid { display: grid; grid-template-columns: 1fr 1fr; gap: clamp(0.8rem,2vw,1.5rem); width: 100%; max-width: min(92vw,1050px); margin: 0 auto; }
+.compare-grid.tri { grid-template-columns: repeat(3, 1fr); }
+.compare-card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: clamp(10px,1.2vw,16px); padding: clamp(0.9rem,2vw,1.6rem); }
+.compare-card-title { font-family: var(--font-display); font-size: var(--h3-size); font-weight: 700; margin-bottom: clamp(0.5rem,1vw,0.8rem); display: flex; align-items: center; gap: clamp(0.4rem,0.6vw,0.6rem); }
+.compare-dot { width: clamp(9px,1vw,12px); height: clamp(9px,1vw,12px); border-radius: 50%; flex-shrink: 0; }
+.compare-list { list-style: none; display: flex; flex-direction: column; gap: clamp(0.35rem,0.7vw,0.55rem); }
+.compare-list li { font-size: var(--small-size); color: var(--text-secondary); padding-left: clamp(0.8rem,1.5vw,1.1rem); position: relative; line-height: 1.45; }
+.compare-list li::before { content:''; position:absolute; left:0; top: 0.5em; width: clamp(4px,0.5vw,6px); height: clamp(4px,0.5vw,6px); border-radius: 50%; background: var(--accent-purple); }
+.compare-list li code { font-family: 'SFMono-Regular', ui-monospace, monospace; color: var(--accent-orange); }
+@media (max-width: 768px) { .compare-grid, .compare-grid.tri { grid-template-columns: 1fr; } }
+
+/* ===========================================
+   CODE BLOCK
+   =========================================== */
+.code-block { background: rgba(0,0,0,0.55); border: 1px solid var(--card-border); border-radius: clamp(8px,1vw,12px); padding: clamp(0.8rem,1.6vw,1.4rem); width: 100%; max-width: min(90vw,860px); margin: 0 auto; font-family: 'SFMono-Regular', ui-monospace, Menlo, Consolas, monospace; font-size: clamp(0.68rem,1.15vw,0.95rem); line-height: 1.65; overflow: hidden; }
+.code-block .c-com { color: rgba(255,255,255,0.4); }
+.code-block .c-key { color: var(--accent-pink); }
+.code-block .c-str { color: #34D399; }
+.code-block .c-fn { color: var(--accent-orange); }
+.code-block .c-line { display: block; white-space: pre-wrap; word-break: break-word; }
+
+/* ===========================================
+   QUOTE
+   =========================================== */
+.quote-slide .slide-content { align-items: center; text-align: center; gap: var(--content-gap); }
+.quote-mark { font-family: var(--font-display); font-size: clamp(3rem,8vw,6rem); line-height: 1; font-weight: 800; background: linear-gradient(135deg, var(--accent-purple), var(--accent-pink)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; opacity: 0.6; }
+.quote-text { font-family: var(--font-display); font-size: clamp(1.1rem,2.5vw,2rem); font-weight: 600; line-height: 1.5; max-width: min(85vw,820px); color: rgba(255,255,255,0.92); }
+.quote-attr { font-size: var(--body-size); color: var(--text-secondary); }
+.quote-attr strong { color: var(--text-primary); font-weight: 600; }
+
+/* Big number */
+.bignumber { font-family: var(--font-display); font-size: clamp(3.5rem,12vw,10rem); font-weight: 800; line-height: 1; background: linear-gradient(135deg, var(--accent-purple), var(--accent-pink), var(--accent-orange)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; filter: drop-shadow(0 0 40px rgba(139,92,246,0.3)); }
+
+/* Section divider centered heading helper */
+.center-head { text-align: center; }
+
+/* ===========================================
+   DEMO SCREENSHOT CARDS
+   =========================================== */
+.shot-grid { display: grid; gap: clamp(0.6rem,1.5vw,1.2rem); width: 100%; max-width: min(94vw,1150px); margin: 0 auto; }
+.shot-grid.two { grid-template-columns: 1fr 1fr; }
+.shot-grid.three { grid-template-columns: repeat(3, 1fr); }
+.shot-card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: clamp(8px,1vw,12px); padding: clamp(0.4rem,0.8vw,0.7rem); display: flex; flex-direction: column; gap: clamp(0.3rem,0.6vw,0.5rem); margin: 0; }
+.shot-card img { width: 100%; max-height: min(40vh,330px); object-fit: contain; border-radius: 6px; background: #14101f; }
+.shot-grid.three .shot-card img { max-height: min(32vh,260px); }
+.shot-card figcaption { font-size: var(--small-size); color: var(--text-secondary); line-height: 1.4; text-align: center; }
+.shot-card figcaption b { color: var(--text-primary); }
+@media (max-width: 768px) { .shot-grid.two, .shot-grid.three { grid-template-columns: 1fr; } .shot-card img { max-height: 30vh; } }
+
+/* ===========================================
+   INLINE EDITING (opted in)
+   =========================================== */
+.edit-hotzone { position: fixed; top: 0; left: 0; width: 80px; height: 80px; z-index: 10000; cursor: pointer; }
+.edit-toggle { position: fixed; top: clamp(10px,1.5vh,18px); left: clamp(10px,1.5vw,18px); width: 40px; height: 40px; border-radius: 50%; border: 1px solid var(--card-border); background: rgba(139,92,246,0.15); color: #fff; font-size: 18px; cursor: pointer; opacity: 0; pointer-events: none; transition: opacity 0.3s ease; z-index: 10001; }
+.edit-toggle.show, .edit-toggle.active { opacity: 1; pointer-events: auto; }
+.edit-toggle.active { background: var(--accent-pink); box-shadow: 0 0 18px var(--glow-purple); }
+[contenteditable="true"] { outline: 2px dashed rgba(217,70,239,0.5); outline-offset: 3px; border-radius: 3px; }
+.edit-badge { position: fixed; top: clamp(10px,1.5vh,18px); left: 50%; transform: translateX(-50%); z-index: 10001; background: var(--accent-pink); color: #fff; font-family: var(--font-body); font-size: 0.75rem; padding: 5px 14px; border-radius: 20px; opacity: 0; pointer-events: none; transition: opacity 0.3s; }
+.edit-badge.show { opacity: 1; }
+</style>
+</head>
+<body>
+<div class="progress-bar" id="progressBar"></div>
+<nav class="nav-dots" id="navDots"></nav>
+<div class="slide-footer">© 2026, Amazon Web Services, Inc. or its affiliates. All rights reserved.</div>
+<div class="page-number" id="pageNumber">1</div>
+
+<!-- Inline editing controls -->
+<div class="edit-hotzone"></div>
+<button class="edit-toggle" id="editToggle" title="编辑模式 (E)">✏️</button>
+<div class="edit-badge" id="editBadge">编辑模式 — Esc 保存退出</div>
+
+<!-- ============ SLIDE 1: TITLE ============ -->
+<section class="slide title-slide">
+    <div class="blob-canvas">
+        <div class="blob" style="width:55vw;height:55vw;top:-10%;left:40%;background:rgba(139,92,246,0.5);animation:blob1 13s ease-in-out infinite;"></div>
+        <div class="blob" style="width:50vw;height:50vw;bottom:-5%;left:-10%;background:rgba(217,70,239,0.45);animation:blob2 16s ease-in-out infinite;"></div>
+        <div class="blob" style="width:40vw;height:40vw;top:20%;left:10%;background:rgba(59,80,200,0.4);animation:blob3 19s ease-in-out infinite;"></div>
+        <div class="blob" style="width:35vw;height:35vw;bottom:10%;right:5%;background:rgba(236,72,153,0.3);animation:blob4 21s ease-in-out infinite;"></div>
+    </div>
+    <div class="slide-content">
+        <div class="title-label reveal d1">AMAZON MANAGED SERVICE FOR APACHE FLINK</div>
+        <h1 class="title-main reveal d2">Managed Flink 故障排查<br><em>CloudWatch Logs 实战</em></h1>
+        <div class="title-accent reveal d3"></div>
+        <p class="title-sub reveal d4">从日志格式到 AI 辅助定位根因 —— 一套可动手复现的学习资料</p>
+        <p class="speaker-info reveal d5" id="speakerInfo"></p>
+    </div>
+</section>
+
+<!-- ============ SLIDE 2: 学习目标 ============ -->
+<section class="slide content-slide">
+    <div class="floating-orb orb-purple" style="width:30vw;height:30vw;top:8%;right:5%;animation:orbFloat2 15s ease-in-out infinite;"></div>
+    <div class="floating-orb orb-pink" style="width:22vw;height:22vw;bottom:12%;left:3%;animation:orbFloat3 17s ease-in-out infinite;"></div>
+    <div class="slide-content">
+        <div class="content-layout">
+            <div>
+                <div class="section-label reveal d1">AGENDA</div>
+                <h2 class="section-title reveal d2">学完你能<br>做到什么</h2>
+                <p class="section-desc reveal d3">围绕 CloudWatch Logs，把 Managed Flink 的排查能力讲透、练会。</p>
+            </div>
+            <div class="pill-cards">
+                <div class="pill-card reveal d2"><div class="pill-icon"><i data-lucide="file-text"></i></div><div class="pill-text">读懂日志<br><span>格式、字段、位置</span></div></div>
+                <div class="pill-card reveal d3"><div class="pill-icon"><i data-lucide="search"></i></div><div class="pill-text">定位根因<br><span>用 Insights 查询六大场景</span></div></div>
+                <div class="pill-card reveal d4"><div class="pill-icon"><i data-lucide="brain"></i></div><div class="pill-text">AI 辅助<br><span>解读栈、生成查询、归因</span></div></div>
+                <div class="pill-card reveal d5"><div class="pill-icon"><i data-lucide="bot"></i></div><div class="pill-text">Kiro 技术支持<br><span>日志→假设→验证→修复闭环</span></div></div>
+                <div class="pill-card reveal d6"><div class="pill-icon"><i data-lucide="rocket"></i></div><div class="pill-text">端到端 Demo<br><span>CDK 一键部署真实排查</span></div></div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ============ SLIDE 3: 背景概念 ============ -->
+<section class="slide">
+    <div class="floating-orb orb-purple" style="width:24vw;height:24vw;bottom:10%;left:60%;animation:orbFloat1 16s ease-in-out infinite;"></div>
+    <div class="slide-content" style="justify-content:center;align-items:center;">
+        <div class="split-layout">
+            <div class="split-left">
+                <div class="section-label reveal d1">背景 · 术语</div>
+                <div class="split-product-name reveal d2">KDA<br><strong>Managed Flink</strong></div>
+                <div class="split-product-sub reveal d3">全托管 Apache Flink 运行环境</div>
+            </div>
+            <div class="split-divider-line reveal d2"></div>
+            <div class="split-right">
+                <ul class="split-bullets">
+                    <li class="reveal d3"><strong>KDA for Apache Flink</strong> 已更名为 Amazon Managed Service for Apache Flink（MSF）</li>
+                    <li class="reveal d4">服务托管 <strong>Job Manager / Task Manager</strong> 的调度、扩缩容、checkpoint 备份</li>
+                    <li class="reveal d5">应用日志以<strong>固定 JSON 格式</strong>投递到 CloudWatch Logs</li>
+                    <li class="reveal d6">JM 与所有 TM 写入<strong>同一个 log stream</strong></li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ============ SLIDE 3b: JM vs TM ============ -->
+<section class="slide compare-slide">
+    <div class="floating-orb orb-blue" style="width:24vw;height:24vw;top:10%;right:6%;animation:orbFloat1 16s ease-in-out infinite;"></div>
+    <div class="slide-content">
+        <div class="section-label reveal d1 center-head">背景 · FLINK 集群的两种角色</div>
+        <h2 class="section-title reveal d2 center-head">Job Manager vs Task Manager</h2>
+        <div class="compare-grid">
+            <div class="compare-card reveal d3">
+                <div class="compare-card-title"><div class="compare-dot" style="background:var(--accent-purple);"></div>Job Manager · "包工头"×1</div>
+                <ul class="compare-list">
+                    <li><strong>协调管理</strong>，自己不算数据</li>
+                    <li>拆作业为子任务，<strong>派发</strong>到 TM 的 slot</li>
+                    <li>监控任务状态与 TM <strong>心跳</strong></li>
+                    <li>触发 <strong>checkpoint</strong>，失败时决定重启策略</li>
+                    <li>日志典型输出：<code>RUNNING → RESTARTING</code>、调度信息</li>
+                </ul>
+            </div>
+            <div class="compare-card reveal d4">
+                <div class="compare-card-title"><div class="compare-dot" style="background:var(--accent-pink);"></div>Task Manager · "施工队"×N</div>
+                <ul class="compare-list">
+                    <li><strong>实际处理数据</strong>的工作进程</li>
+                    <li>跑算子逻辑：map / filter / window / <strong>UDF</strong></li>
+                    <li>提供 <strong>task slot</strong>，并行度越高需要越多</li>
+                    <li>持有算子 state，checkpoint 时上传备份</li>
+                    <li>日志典型输出：UDF 异常栈、<code>TimeoutException</code> / heartbeat</li>
+                </ul>
+            </div>
+        </div>
+        <p class="section-desc reveal d5 center-head" style="max-width:min(90vw,820px);margin:0 auto;">Managed Flink 全托管这两种角色，你只管代码 / 并行度 / KPU · JM 和所有 TM 写同一个 log stream，靠 threadName / logger 分辨谁在说话</p>
+    </div>
+</section>
+
+<!-- ============ SLIDE 4: 日志格式与位置 ============ -->
+<section class="slide content-slide">
+    <div class="floating-orb orb-blue" style="width:28vw;height:28vw;top:10%;right:8%;animation:orbFloat2 16s ease-in-out infinite;"></div>
+    <div class="slide-content">
+        <div class="content-layout">
+            <div>
+                <div class="section-label reveal d1">第 1 章 · LOG FORMAT & LOCATION</div>
+                <h2 class="section-title reveal d2">日志<br>在哪、长什么样</h2>
+                <p class="section-desc reveal d3">排查前先确认：日志在哪个 group / stream，级别够不够，用哪些字段过滤。</p>
+            </div>
+            <div class="pill-cards">
+                <div class="pill-card reveal d2"><div class="pill-icon"><i data-lucide="folder"></i></div><div class="pill-text">Log Group<br><span class="mono">/aws/kinesis-analytics/&lt;app&gt;</span></div></div>
+                <div class="pill-card reveal d3"><div class="pill-icon"><i data-lucide="list"></i></div><div class="pill-text">Log Stream<br><span>JM + 所有 TM 交错写入同一个</span></div></div>
+                <div class="pill-card reveal d4"><div class="pill-icon"><i data-lucide="sliders-horizontal"></i></div><div class="pill-text">日志级别<br><span>DEBUG / INFO / WARN / ERROR（服务级统一）</span></div></div>
+                <div class="pill-card reveal d5"><div class="pill-icon"><i data-lucide="gauge"></i></div><div class="pill-text">监控级别 ≠ 日志级别<br><span>Application→Task→Operator→Parallelism</span></div></div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ============ SLIDE 5: JSON 字段详解 ============ -->
+<section class="slide">
+    <div class="floating-orb orb-purple" style="width:25vw;height:25vw;top:12%;left:5%;animation:orbFloat1 16s ease-in-out infinite;"></div>
+    <div class="slide-content" style="gap:var(--content-gap);align-items:center;">
+        <div class="center-head">
+            <div class="section-label reveal d1">固定 JSON SCHEMA</div>
+            <h2 class="section-title reveal d2">六个关键字段，排查全靠它们</h2>
+        </div>
+        <div class="features-grid">
+            <div class="feature-card reveal d3"><div class="feat-icon"><i data-lucide="alert-triangle"></i></div><h3>messageType</h3><p>日志级别，过滤错误：<code>filter messageType="ERROR"</code></p></div>
+            <div class="feature-card reveal d3"><div class="feat-icon"><i data-lucide="message-square"></i></div><h3>message</h3><p>正文，异常栈 / 状态变更都在这里，关键词匹配主字段</p></div>
+            <div class="feature-card reveal d4"><div class="feat-icon"><i data-lucide="tag"></i></div><h3>logger</h3><p>来源类名，如 <code>PythonDriver</code>、连接器类</p></div>
+            <div class="feature-card reveal d4"><div class="feat-icon"><i data-lucide="map-pin"></i></div><h3>locationInformation</h3><p>代码位置 类.方法(文件:行)，快速定位代码</p></div>
+            <div class="feature-card reveal d5"><div class="feat-icon"><i data-lucide="git-branch"></i></div><h3>threadName</h3><p>线程名，区分 JM / TM、连接器线程</p></div>
+            <div class="feature-card reveal d5"><div class="feat-icon"><i data-lucide="fingerprint"></i></div><h3>applicationARN</h3><p>应用 ARN，多应用共用日志时按应用过滤</p></div>
+        </div>
+    </div>
+</section>
+
+<!-- ============ SLIDE 6: 日志级别 vs 监控级别 ============ -->
+<section class="slide compare-slide">
+    <div class="floating-orb orb-pink" style="width:22vw;height:22vw;top:12%;left:8%;animation:orbFloat2 15s ease-in-out infinite;"></div>
+    <div class="slide-content">
+        <div class="section-label reveal d1 center-head">最容易混淆的两个概念</div>
+        <h2 class="section-title reveal d2 center-head">日志级别 vs 监控级别</h2>
+        <div class="compare-grid">
+            <div class="compare-card reveal d3">
+                <div class="compare-card-title"><div class="compare-dot" style="background:var(--accent-purple);"></div>日志级别 Logging Level</div>
+                <ul class="compare-list">
+                    <li>控制写多少详细度的<strong>日志</strong>，作用于所有 logger</li>
+                    <li><code>DEBUG / INFO / WARN / ERROR</code>，不支持 per-package</li>
+                    <li>生产建议 INFO/WARN，排查疑难临时开 DEBUG 再调回</li>
+                </ul>
+            </div>
+            <div class="compare-card reveal d4">
+                <div class="compare-card-title"><div class="compare-dot" style="background:var(--accent-pink);"></div>监控级别 Metrics Level</div>
+                <ul class="compare-list">
+                    <li>控制 CloudWatch <strong>指标</strong>粒度，不是日志</li>
+                    <li><code>Application → Task → Operator → Parallelism</code></li>
+                    <li>Parallelism 级别不建议用于并行度 &gt; 64，成本高</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ============ SLIDE 7: 六大排查场景 ============ -->
+<section class="slide">
+    <div class="floating-orb orb-purple" style="width:26vw;height:26vw;top:8%;right:6%;animation:orbFloat3 17s ease-in-out infinite;"></div>
+    <div class="slide-content" style="gap:var(--content-gap);align-items:center;">
+        <div class="center-head">
+            <div class="section-label reveal d1">第 2 章 · SCENARIOS</div>
+            <h2 class="section-title reveal d2">六大高频故障场景速查</h2>
+        </div>
+        <div class="features-grid">
+            <div class="feature-card reveal d3"><div class="feat-icon"><i data-lucide="refresh-cw"></i></div><h3>重启风暴</h3><p>未处理异常 → failover。看 <code>fullRestarts</code> / <code>downtime</code></p></div>
+            <div class="feature-card reveal d3"><div class="feat-icon"><i data-lucide="heart-pulse"></i></div><h3>TM 心跳超时</h3><p>TimeoutException / slot removed。看 CPU / 内存尖峰</p></div>
+            <div class="feature-card reveal d4"><div class="feat-icon"><i data-lucide="layers"></i></div><h3>网络缓冲不足</h3><p>Insufficient network buffers。调 parallelismPerKpu</p></div>
+            <div class="feature-card reveal d4"><div class="feat-icon"><i data-lucide="lock"></i></div><h3>权限错误</h3><p><code>AccessDenied</code>。核对 IAM 角色与信任关系</p></div>
+            <div class="feature-card reveal d5"><div class="feat-icon"><i data-lucide="unplug"></i></div><h3>源/汇不存在</h3><p><code>ResourceNotFound</code>。核对 stream 名与 Region</p></div>
+            <div class="feature-card reveal d5"><div class="feat-icon"><i data-lucide="trending-up"></i></div><h3>反压 / 限流</h3><p><code>millisBehindLatest</code> 升高 + 源端限流</p></div>
+        </div>
+    </div>
+</section>
+
+<!-- ============ SLIDE 8: 场景深入 重启风暴 ============ -->
+<section class="slide process-slide">
+    <div class="floating-orb orb-purple" style="width:24vw;height:24vw;bottom:15%;right:5%;animation:orbFloat1 16s ease-in-out infinite;"></div>
+    <div class="slide-content">
+        <div class="section-label reveal d1 center-head">场景深入 · RESTART STORM</div>
+        <h2 class="section-title reveal d2 center-head">排查心法：先指标，后日志</h2>
+        <div class="process-row">
+            <div class="process-step reveal d3"><div class="step-num">1</div><div class="step-title">症状</div><div class="step-desc"><span class="mono">fullRestarts↑</span>、downtime&gt;0、处理停滞</div></div>
+            <div class="process-step reveal d4"><div class="step-num">2</div><div class="step-title">查日志</div><div class="step-desc">filter <span class="mono">RESTARTING/FAILED/Exception</span></div></div>
+            <div class="process-step reveal d5"><div class="step-num">3</div><div class="step-title">定根因</div><div class="step-desc">算子未处理异常？源/汇未预置？TM 资源压力？</div></div>
+            <div class="process-step reveal d6"><div class="step-num">4</div><div class="step-title">修复</div><div class="step-desc">处理可重试异常 / 扩 shard / 调并行度，验证指标回落</div></div>
+        </div>
+    </div>
+</section>
+
+<!-- ============ SLIDE 9: 结合 AI 分析 ============ -->
+<section class="slide compare-slide">
+    <div class="floating-orb orb-pink" style="width:22vw;height:22vw;top:10%;left:8%;animation:orbFloat2 15s ease-in-out infinite;"></div>
+    <div class="slide-content">
+        <div class="section-label reveal d1 center-head">第 2 章 · 结合 AI</div>
+        <h2 class="section-title reveal d2 center-head">三个可直接用的提示词模板</h2>
+        <div class="compare-grid tri">
+            <div class="compare-card reveal d3">
+                <div class="compare-card-title"><div class="compare-dot" style="background:var(--accent-purple);"></div>A · 解读栈</div>
+                <ul class="compare-list"><li>一句话概括发生了什么</li><li>指出根因分类：代码/资源/权限/配置/平台</li><li>给验证步骤与修复建议</li></ul>
+            </div>
+            <div class="compare-card reveal d4">
+                <div class="compare-card-title"><div class="compare-dot" style="background:var(--accent-pink);"></div>B · 生成查询</div>
+                <ul class="compare-list"><li>基于固定 JSON 字段</li><li>描述目标即可产出 Insights 查询</li><li>自动用 stats / bin / sort</li></ul>
+            </div>
+            <div class="compare-card reveal d5">
+                <div class="compare-card-title"><div class="compare-dot" style="background:var(--accent-orange);"></div>C · 根因归纳</div>
+                <ul class="compare-list"><li>多条日志还原因果时间线</li><li>输出：时间→事件→影响</li><li>指出最可能的初始触发点</li></ul>
+            </div>
+        </div>
+        <p class="section-desc reveal d6 center-head" style="max-width:min(90vw,760px);margin:0 auto;">脱敏后再喂模型 · 附应用语言/版本/并行度 · 结论用指标交叉验证</p>
+    </div>
+</section>
+
+<!-- ============ SLIDE 10: Kiro 技术支持 ============ -->
+<section class="slide content-slide">
+    <div class="floating-orb orb-blue" style="width:28vw;height:28vw;top:8%;right:5%;animation:orbFloat2 16s ease-in-out infinite;"></div>
+    <div class="floating-orb orb-pink" style="width:20vw;height:20vw;bottom:12%;left:4%;animation:orbFloat3 17s ease-in-out infinite;"></div>
+    <div class="slide-content">
+        <div class="content-layout">
+            <div>
+                <div class="section-label reveal d1">第 3 章 · KIRO</div>
+                <h2 class="section-title reveal d2">Kiro 作为<br>技术支持</h2>
+                <p class="section-desc reveal d3">从"把日志丢给它"到"帮你查、帮你改、帮你沉淀经验"。</p>
+            </div>
+            <div class="pill-cards">
+                <div class="pill-card reveal d2"><div class="pill-icon"><i data-lucide="terminal"></i></div><div class="pill-text">跑 CLI 取证<br><span>自动拉取问题时间窗日志</span></div></div>
+                <div class="pill-card reveal d3"><div class="pill-icon"><i data-lucide="file-search"></i></div><div class="pill-text">读日志归因<br><span>产出 症状-根因-验证-修复</span></div></div>
+                <div class="pill-card reveal d4"><div class="pill-icon"><i data-lucide="code"></i></div><div class="pill-text">直接改代码<br><span>异常处理 / 连接器参数 / 依赖</span></div></div>
+                <div class="pill-card reveal d5"><div class="pill-icon"><i data-lucide="book-marked"></i></div><div class="pill-text">Steering 固化<br><span>团队 runbook 长期上下文</span></div></div>
+                <div class="pill-card reveal d6"><div class="pill-icon"><i data-lucide="zap"></i></div><div class="pill-text">Hooks 自动化<br><span>保存代码即检查异常处理</span></div></div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ============ SLIDE 11: CloudWatch MCP 自然语言 ============ -->
+<section class="slide">
+    <div class="floating-orb orb-purple" style="width:24vw;height:24vw;bottom:10%;left:58%;animation:orbFloat1 15s ease-in-out infinite;"></div>
+    <div class="slide-content" style="justify-content:center;align-items:center;">
+        <div class="split-layout">
+            <div class="split-left">
+                <div class="section-label reveal d1">第 6 章 · CLOUDWATCH MCP</div>
+                <div class="split-product-name reveal d2">自然语言<br><strong>查日志</strong></div>
+                <div class="split-product-sub reveal d3">不用背 Insights / PPL / SQL 语法</div>
+            </div>
+            <div class="split-divider-line reveal d2"></div>
+            <div class="split-right">
+                <ul class="split-bullets">
+                    <li class="reveal d3">已接入官方 <strong>awslabs.cloudwatch-mcp-server</strong></li>
+                    <li class="reveal d4">直接问："<strong>这个应用最近 15 分钟为什么一直重启</strong>"</li>
+                    <li class="reveal d5">Kiro 自动：定位 group → 分析错误 → 拉指标 → 给根因</li>
+                    <li class="reveal d6">只读工具已 autoApprove，写操作先征求确认</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ============ SLIDE 11b: AWS DevOps Agent ============ -->
+<section class="slide content-slide">
+    <div class="floating-orb orb-purple" style="width:26vw;height:26vw;top:10%;right:6%;animation:orbFloat2 16s ease-in-out infinite;"></div>
+    <div class="floating-orb orb-blue" style="width:20vw;height:20vw;bottom:10%;left:5%;animation:orbFloat3 18s ease-in-out infinite;"></div>
+    <div class="slide-content">
+        <div class="content-layout">
+            <div>
+                <div class="section-label reveal d1">AI 排查 · AWS DEVOPS AGENT</div>
+                <h2 class="section-title reveal d2">生产值守：<br>让 Agent 自主排查</h2>
+                <p class="section-desc reveal d3">Kiro 是交互式助手，DevOps Agent 是 7×24 自主调查员 —— 告警触发即开查，人还没上线已有根因候选。2026 年 3 月 GA。</p>
+            </div>
+            <div class="pill-cards">
+                <div class="pill-card reveal d2"><div class="pill-icon"><i data-lucide="siren"></i></div><div class="pill-text">告警自动触发<br><span>fullRestarts / downtime 告警 → 立即开始调查</span></div></div>
+                <div class="pill-card reveal d3"><div class="pill-icon"><i data-lucide="network"></i></div><div class="pill-text">多信号关联<br><span>指标 + 日志 + 应用拓扑，产出根因分析与缓解建议</span></div></div>
+                <div class="pill-card reveal d4"><div class="pill-icon"><i data-lucide="book-open-check"></i></div><div class="pill-text">Skills 编码 runbook<br><span>把团队验证过的排查步骤固化给 Agent 执行</span></div></div>
+                <div class="pill-card reveal d5"><div class="pill-icon"><i data-lucide="messages-square"></i></div><div class="pill-text">协同与回流<br><span>Slack 通报进展 · ServiceNow 工单双向集成</span></div></div>
+                <div class="pill-card reveal d6"><div class="pill-icon"><i data-lucide="wrench"></i></div><div class="pill-text">分工建议<br><span>DevOps Agent 定位根因 → Kiro 改代码修复闭环</span></div></div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ============ SLIDE 12: Logs Insights QL 语法 ============ -->
+<section class="slide">
+    <div class="floating-orb orb-blue" style="width:24vw;height:24vw;bottom:10%;left:6%;animation:orbFloat1 16s ease-in-out infinite;"></div>
+    <div class="slide-content" style="gap:var(--content-gap);align-items:center;">
+        <div class="center-head">
+            <div class="section-label reveal d1">第 7 章 · LOGS INSIGHTS QL 语法</div>
+            <h2 class="section-title reveal d2">管道式流水线：fields | filter | stats</h2>
+        </div>
+        <div class="features-grid">
+            <div class="feature-card reveal d3"><div class="feat-icon"><i data-lucide="columns-3"></i></div><h3>fields</h3><p>选择要显示的字段：<code>fields @timestamp, message</code></p></div>
+            <div class="feature-card reveal d3"><div class="feat-icon"><i data-lucide="filter"></i></div><h3>filter</h3><p>过滤，支持 = / like / 正则：<code>filter message like /FAILED/</code></p></div>
+            <div class="feature-card reveal d4"><div class="feat-icon"><i data-lucide="bar-chart-3"></i></div><h3>stats + bin</h3><p>聚合与时间趋势：<code>stats count(*) by bin(5m)</code></p></div>
+            <div class="feature-card reveal d4"><div class="feat-icon"><i data-lucide="scissors"></i></div><h3>parse</h3><p>正则抽取临时字段，把非结构化正文变成可聚合的列</p></div>
+            <div class="feature-card reveal d5"><div class="feat-icon"><i data-lucide="arrow-down-narrow-wide"></i></div><h3>sort / limit</h3><p>排序限行：<code>sort @timestamp desc | limit 20</code></p></div>
+            <div class="feature-card reveal d5"><div class="feat-icon"><i data-lucide="at-sign"></i></div><h3>@ 内置字段</h3><p><code>@timestamp</code> / <code>@message</code> / <code>@logStream</code>，JSON 顶层字段自动发现</p></div>
+        </div>
+        <p class="section-desc reveal d6 center-head">按扫描量计费 · 先缩小时间窗 · 单次查询最多返回 10000 行</p>
+    </div>
+</section>
+
+<!-- ============ SLIDE 13: OpenSearch 三语言 ============ -->
+<section class="slide">
+    <div class="floating-orb orb-pink" style="width:22vw;height:22vw;top:10%;right:8%;animation:orbFloat3 16s ease-in-out infinite;"></div>
+    <div class="slide-content" style="gap:var(--content-gap);align-items:center;">
+        <div class="center-head">
+            <div class="section-label reveal d1">第 7 章 · OPENSEARCH 语法支持</div>
+            <h2 class="section-title reveal d2">三种查询语言，同一批日志</h2>
+            <p class="section-desc reveal d2">CloudWatch Logs 原生集成 OpenSearch PPL / SQL —— 日志不动、零迁移，控制台下拉框即可切换</p>
+        </div>
+        <div class="compare-grid tri" style="max-width:min(94vw,1100px);">
+            <div class="compare-card reveal d3">
+                <div class="compare-card-title"><div class="compare-dot" style="background:var(--accent-purple);"></div>Logs Insights QL</div>
+                <div class="code-block" style="padding:clamp(0.6rem,1.2vw,1rem);"><span class="c-line"><span class="c-key">filter</span> messageType=<span class="c-str">"ERROR"</span></span><span class="c-line">| <span class="c-key">stats</span> <span class="c-fn">count(*)</span> <span class="c-key">by</span> logger</span><span class="c-line">| <span class="c-key">sort</span> errors <span class="c-key">desc</span></span></div>
+            </div>
+            <div class="compare-card reveal d4">
+                <div class="compare-card-title"><div class="compare-dot" style="background:var(--accent-pink);"></div>OpenSearch PPL</div>
+                <div class="code-block" style="padding:clamp(0.6rem,1.2vw,1rem);"><span class="c-line"><span class="c-key">where</span> messageType=<span class="c-str">"ERROR"</span></span><span class="c-line">| <span class="c-key">stats</span> <span class="c-fn">count()</span> <span class="c-key">by</span> logger</span><span class="c-line">| <span class="c-key">sort</span> -errors | <span class="c-key">head</span> 10</span></div>
+            </div>
+            <div class="compare-card reveal d5">
+                <div class="compare-card-title"><div class="compare-dot" style="background:var(--accent-orange);"></div>OpenSearch SQL</div>
+                <div class="code-block" style="padding:clamp(0.6rem,1.2vw,1rem);"><span class="c-line"><span class="c-key">SELECT</span> logger, <span class="c-fn">COUNT(*)</span></span><span class="c-line"><span class="c-key">FROM</span> kda_demo</span><span class="c-line"><span class="c-key">WHERE</span> messageType=<span class="c-str">'ERROR'</span></span><span class="c-line"><span class="c-key">GROUP BY</span> logger</span></div>
+            </div>
+        </div>
+        <p class="section-desc reveal d6 center-head">PPL 多出 top/rare/dedup/trendline · SQL 支持 JOIN/子查询，且对 AI 生成最友好 · QL 文档示例最多</p>
+    </div>
+</section>
+
+<!-- ============ SLIDE 14: Demo CDK 流程 ============ -->
+<section class="slide process-slide">
+    <div class="floating-orb orb-purple" style="width:24vw;height:24vw;top:12%;left:6%;animation:orbFloat1 16s ease-in-out infinite;"></div>
+    <div class="slide-content">
+        <div class="section-label reveal d1 center-head">第 4 章 · DEMO</div>
+        <h2 class="section-title reveal d2 center-head">CDK 一键部署一个会"重启风暴"的应用</h2>
+        <div class="process-row">
+            <div class="process-step reveal d3"><div class="step-num">1</div><div class="step-title">Deploy</div><div class="step-desc"><span class="mono">cdk deploy</span> 到 default profile，内置 datagen + 埋 bug 的 UDF</div></div>
+            <div class="process-step reveal d4"><div class="step-num">2</div><div class="step-title">Start</div><div class="step-desc"><span class="mono">start-application</span>，约 1 分钟进 RUNNING</div></div>
+            <div class="process-step reveal d5"><div class="step-num">3</div><div class="step-title">Observe</div><div class="step-desc">Insights / MCP 看重启日志与 fullRestarts</div></div>
+            <div class="process-step reveal d6"><div class="step-num">4</div><div class="step-title">Cleanup</div><div class="step-desc"><span class="mono">stop --force</span> → <span class="mono">cdk destroy</span></div></div>
+        </div>
+        <p class="section-desc reveal d7 center-head" style="margin-top:var(--content-gap);">自包含无外部依赖 · 真实重启循环 · 可演示"改代码修复"闭环 · 完整步骤见 <span class="mono">04-demo/console-demo-runbook.md</span></p>
+    </div>
+</section>
+
+<!-- ============ SLIDE 14b: Demo 实拍 · 指标定位 ============ -->
+<section class="slide">
+    <div class="floating-orb orb-pink" style="width:22vw;height:22vw;bottom:10%;right:8%;animation:orbFloat2 17s ease-in-out infinite;"></div>
+    <div class="slide-content" style="gap:var(--content-gap);">
+        <div class="center-head">
+            <div class="section-label reveal d1">DEMO 实拍 · 第 1 幕</div>
+            <h2 class="section-title reveal d2">状态骗人，指标说真话</h2>
+        </div>
+        <div class="shot-grid two">
+            <figure class="shot-card reveal d3"><img src="../04-demo/images/01-app-list.png" alt="Managed Flink 应用列表页，应用状态显示 Running"><figcaption>列表页显示 <b>Running</b> —— 粗粒度状态看不出重启循环</figcaption></figure>
+            <figure class="shot-card reveal d4"><img src="../04-demo/images/02-monitoring-metrics.png" alt="Monitoring 页指标：fullRestarts 爬升，uptime 锯齿"><figcaption><b>fullRestarts 爬楼梯 + uptime 锯齿</b> —— 2 分钟锁定时间窗</figcaption></figure>
+        </div>
+        <p class="section-desc reveal d5 center-head">同一张 Uptime 图里：橙线 fullRestarts 半小时爬到 96，蓝线 uptime 每次活不过一两分钟</p>
+    </div>
+</section>
+
+<!-- ============ SLIDE 14c: Demo 实拍 · AI 三件套 ============ -->
+<section class="slide">
+    <div class="floating-orb orb-blue" style="width:24vw;height:24vw;top:10%;left:6%;animation:orbFloat1 16s ease-in-out infinite;"></div>
+    <div class="slide-content" style="gap:var(--content-gap);">
+        <div class="center-head">
+            <div class="section-label reveal d1">DEMO 实拍 · 第 2 幕</div>
+            <h2 class="section-title reveal d2">日志找根因：AI 一路加速</h2>
+        </div>
+        <div class="shot-grid three">
+            <figure class="shot-card reveal d3"><img src="../04-demo/images/07-text-to-sql.png" alt="Logs Insights Query generator 用自然语言生成查询"><figcaption><b>① 自然语言生成查询</b> —— 不用记 Insights 语法</figcaption></figure>
+            <figure class="shot-card reveal d4"><img src="../04-demo/images/05-logs-summarize.png" alt="CloudWatch AI Summarize 自动总结日志"><figcaption><b>② AI Summarize 收证据</b> —— 自己发现"都是 risk=7"</figcaption></figure>
+            <figure class="shot-card reveal d5"><img src="../04-demo/images/06-kiro-analysis.png" alt="Kiro 给出时间线、root cause 与修复建议"><figcaption><b>③ Kiro 给结论</b> —— 时间线 + root cause + 改法</figcaption></figure>
+        </div>
+        <p class="section-desc reveal d6 center-head">Summarize 管证据，Kiro 管结论和修复 —— <span class="mono">main.py:100 ValueError (risk=7)</span>，10% 概率数据触发型 bug</p>
+    </div>
+</section>
+
+<!-- ============ SLIDE 14d: Demo 实拍 · 修复闭环 ============ -->
+<section class="slide">
+    <div class="floating-orb orb-purple" style="width:26vw;height:26vw;bottom:8%;left:60%;animation:orbFloat3 18s ease-in-out infinite;"></div>
+    <div class="slide-content" style="gap:var(--content-gap);">
+        <div class="center-head">
+            <div class="section-label reveal d1">DEMO 实拍 · 第 3 幕</div>
+            <h2 class="section-title reveal d2">修复闭环：同样的坏数据，作业不再死</h2>
+        </div>
+        <div class="shot-grid two">
+            <figure class="shot-card reveal d3"><img src="../04-demo/images/04-insights-traceback.png" alt="修复前：Logs Insights 中的 Python 异常栈"><figcaption><b>修复前</b> —— UDF 抛异常打穿算子，1 小时 166 次 ValueError</figcaption></figure>
+            <figure class="shot-card reveal d4"><img src="../04-demo/images/08-monitoring-healthy.png" alt="修复后：fullRestarts 走平，uptime 持续上升"><figcaption><b>修复后</b> —— fullRestarts 走平，uptime 一路上扬</figcaption></figure>
+        </div>
+        <p class="section-desc reveal d5 center-head">改 UDF：raise → WARN + fallback · 部署后 5 分钟实测：<span class="hl">93 条兜底日志，0 次失败</span></p>
+    </div>
+</section>
+
+<!-- ============ SLIDE 15: 实测结果 ============ -->
+<section class="slide">
+    <div class="floating-orb orb-purple" style="width:28vw;height:28vw;top:8%;right:10%;animation:orbFloat3 18s ease-in-out infinite;"></div>
+    <div class="slide-content" style="gap:var(--content-gap);align-items:center;">
+        <div class="center-head">
+            <div class="section-label reveal d1">第 5 章 · 实测验证 @ us-east-1 + ap-northeast-1</div>
+            <h2 class="section-title reveal d2">真机跑通两轮，全部清理</h2>
+        </div>
+        <div class="stats-row reveal d3">
+            <div class="stat-item"><div class="stat-value">76s</div><div class="stat-label">CDK 部署耗时</div></div>
+            <div class="stat-item"><div class="stat-value">96+</div><div class="stat-label">fullRestarts / 半小时</div></div>
+            <div class="stat-item"><div class="stat-value">93→0</div><div class="stat-label">修复后 WARN vs 失败</div></div>
+            <div class="stat-item"><div class="stat-value">0</div><div class="stat-label">残留计费资源</div></div>
+        </div>
+        <div class="features-grid" style="max-width:min(92vw,1080px);grid-template-columns:repeat(4,1fr);">
+            <div class="feature-card reveal d4"><div class="feat-icon"><i data-lucide="bug"></i></div><h3>抓到埋的 bug</h3><p><code>ValueError ... (risk=7)</code> @ main.py:100，AI 与人工双重确认</p></div>
+            <div class="feature-card reveal d5"><div class="feat-icon"><i data-lucide="shield-alert"></i></div><h3>踩坑 1 · 权限竞态</h3><p>应用先于 IAM 策略校验 S3，加显式依赖修复</p></div>
+            <div class="feature-card reveal d6"><div class="feat-icon"><i data-lucide="octagon-x"></i></div><h3>踩坑 2 · 停不掉</h3><p>downtime 无法 snapshot，须 <code>stop --force</code></p></div>
+            <div class="feature-card reveal d7"><div class="feat-icon"><i data-lucide="refresh-cw-off"></i></div><h3>踩坑 3 · deploy 卡死</h3><p>重启循环中 deploy 会卡 <code>ROLLBACK_FAILED</code>，先停再部署</p></div>
+        </div>
+    </div>
+</section>
+
+<!-- ============ SLIDE 16: 关键经验 + closing ============ -->
+<section class="slide title-slide">
+    <div class="blob-canvas">
+        <div class="blob" style="width:50vw;height:50vw;top:-8%;left:35%;background:rgba(139,92,246,0.45);animation:blob1 14s ease-in-out infinite;"></div>
+        <div class="blob" style="width:45vw;height:45vw;bottom:-8%;left:-8%;background:rgba(217,70,239,0.4);animation:blob2 17s ease-in-out infinite;"></div>
+        <div class="blob" style="width:32vw;height:32vw;bottom:8%;right:6%;background:rgba(255,153,0,0.22);animation:blob4 20s ease-in-out infinite;"></div>
+    </div>
+    <div class="slide-content">
+        <div class="title-label reveal d1">KEY TAKEAWAYS</div>
+        <h1 class="title-main reveal d2" style="font-size:clamp(1.6rem,4.5vw,3.4rem);">先指标，后日志<br><em>用 AI 加速，用 Kiro 闭环</em></h1>
+        <div class="title-accent reveal d3"></div>
+        <p class="title-sub reveal d4">日志固定 JSON，靠 messageType / message / logger 过滤 · 重启九成来自未处理异常或资源不足 · IaC 部署当心权限竞态，downtime 应用用 --force 停止</p>
+        <p class="speaker-info reveal d5">开始动手：04-demo/cdk · README 有完整 90 分钟授课节奏</p>
+    </div>
+</section>
+
+<script>
+/* ===========================================
+   SLIDE PRESENTATION CONTROLLER
+   =========================================== */
+class SlidePresentation {
+    constructor() {
+        this.slides = Array.from(document.querySelectorAll('.slide'));
+        this.current = 0;
+        this.progressBar = document.getElementById('progressBar');
+        this.pageNum = document.getElementById('pageNumber');
+        this.navDots = document.getElementById('navDots');
+        this.buildNavDots();
+        this.observe();
+        this.keyboard();
+        this.touch();
+    }
+    buildNavDots() {
+        this.slides.forEach((_, i) => {
+            const b = document.createElement('button');
+            b.setAttribute('aria-label', '跳到第 ' + (i + 1) + ' 页');
+            b.addEventListener('click', () => this.slides[i].scrollIntoView({ behavior: 'smooth' }));
+            this.navDots.appendChild(b);
+        });
+        this.dots = Array.from(this.navDots.children);
+    }
+    observe() {
+        const io = new IntersectionObserver((entries) => {
+            entries.forEach((e) => {
+                if (e.isIntersecting && e.intersectionRatio > 0.5) {
+                    e.target.classList.add('visible');
+                    this.current = this.slides.indexOf(e.target);
+                    this.updateUI();
+                }
+            });
+        }, { threshold: [0.5] });
+        this.slides.forEach((s) => io.observe(s));
+    }
+    updateUI() {
+        const pct = this.slides.length > 1 ? (this.current / (this.slides.length - 1)) * 100 : 0;
+        if (this.progressBar) this.progressBar.style.width = pct + '%';
+        if (this.pageNum) this.pageNum.textContent = (this.current + 1);
+        if (this.dots) this.dots.forEach((d, i) => d.classList.toggle('active', i === this.current));
+    }
+    go(dir) {
+        const next = Math.min(Math.max(this.current + dir, 0), this.slides.length - 1);
+        this.slides[next].scrollIntoView({ behavior: 'smooth' });
+    }
+    keyboard() {
+        document.addEventListener('keydown', (e) => {
+            if (document.activeElement && document.activeElement.getAttribute('contenteditable') === 'true') return;
+            if (['ArrowDown', 'ArrowRight', ' ', 'PageDown'].includes(e.key)) { e.preventDefault(); this.go(1); }
+            if (['ArrowUp', 'ArrowLeft', 'PageUp'].includes(e.key)) { e.preventDefault(); this.go(-1); }
+        });
+    }
+    touch() {
+        let y0 = null;
+        document.addEventListener('touchstart', (e) => { y0 = e.touches[0].clientY; }, { passive: true });
+        document.addEventListener('touchend', (e) => {
+            if (y0 === null) return;
+            const dy = y0 - e.changedTouches[0].clientY;
+            if (Math.abs(dy) > 50) this.go(dy > 0 ? 1 : -1);
+            y0 = null;
+        }, { passive: true });
+    }
+}
+
+/* ===========================================
+   INLINE EDITING (E to toggle, Esc to save)
+   =========================================== */
+class InlineEditor {
+    constructor() {
+        this.isActive = false;
+        this.toggleBtn = document.getElementById('editToggle');
+        this.badge = document.getElementById('editBadge');
+        this.editable = document.querySelectorAll('h1, h2, h3, p, li, span, .step-title, .step-desc, .pill-text, .stat-value, .stat-label');
+        this.bind();
+    }
+    bind() {
+        const hotzone = document.querySelector('.edit-hotzone');
+        let hideTimeout = null;
+        const show = () => { clearTimeout(hideTimeout); this.toggleBtn.classList.add('show'); };
+        const hide = () => { hideTimeout = setTimeout(() => { if (!this.isActive) this.toggleBtn.classList.remove('show'); }, 400); };
+        hotzone.addEventListener('mouseenter', show);
+        hotzone.addEventListener('mouseleave', hide);
+        this.toggleBtn.addEventListener('mouseenter', show);
+        this.toggleBtn.addEventListener('mouseleave', hide);
+        hotzone.addEventListener('click', () => this.toggle());
+        this.toggleBtn.addEventListener('click', () => this.toggle());
+        document.addEventListener('keydown', (e) => {
+            const editing = e.target.getAttribute && e.target.getAttribute('contenteditable') === 'true';
+            if ((e.key === 'e' || e.key === 'E') && !editing) this.toggle();
+            if (e.key === 'Escape' && this.isActive) this.toggle();
+        });
+    }
+    toggle() {
+        this.isActive = !this.isActive;
+        this.toggleBtn.classList.toggle('active', this.isActive);
+        this.badge.classList.toggle('show', this.isActive);
+        this.editable.forEach((el) => {
+            el.setAttribute('contenteditable', this.isActive ? 'true' : 'false');
+        });
+        if (this.isActive) this.toggleBtn.classList.add('show');
+    }
+}
+
+/* Init */
+if (typeof SPEAKER !== 'undefined') {
+    const el = document.getElementById('speakerInfo');
+    if (el) el.textContent = `${SPEAKER.name}, ${SPEAKER.company} ${SPEAKER.title}`;
+}
+new SlidePresentation();
+new InlineEditor();
+if (typeof lucide !== 'undefined') lucide.createIcons();
+</script>
+</body>
+</html>

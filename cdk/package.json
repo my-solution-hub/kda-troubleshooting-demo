@@ -1,0 +1,27 @@
+{
+  "name": "kda-flink-troubleshooting-demo",
+  "version": "1.0.0",
+  "description": "CDK stack that deploys a Managed Flink app which intentionally restart-loops, for CloudWatch Logs troubleshooting demos.",
+  "bin": {
+    "kda-demo": "bin/app.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "synth": "cdk synth",
+    "deploy": "cdk deploy",
+    "destroy": "cdk destroy",
+    "start-app": "aws kinesisanalyticsv2 start-application --application-name kda-troubleshooting-demo --run-configuration '{\"FlinkRunConfiguration\":{\"AllowNonRestoredState\":true}}'",
+    "stop-app": "aws kinesisanalyticsv2 stop-application --application-name kda-troubleshooting-demo",
+    "status": "aws kinesisanalyticsv2 describe-application --application-name kda-troubleshooting-demo --query 'ApplicationDetail.ApplicationStatus' --output text"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "aws-cdk": "^2.150.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.0"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.150.0",
+    "constructs": "^10.3.0"
+  }
+}

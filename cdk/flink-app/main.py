@@ -97,6 +97,9 @@ def main():
         if fail_mode and risk == fail_on_risk:
             # Unhandled exception -> operator fails -> job restarts from checkpoint.
             # This mirrors a real-world NullPointerException in an enrichment operator.
+            # FIX (demo step 5, way B): replace the raise below with
+            #   LOG.warning("Enrichment lookup failed for country=%s risk=%s, using fallback", country, risk)
+            #   return "unknown"
             raise ValueError(
                 f"Unhandled enrichment error: downstream lookup failed for country={country} (risk={risk})"
             )
